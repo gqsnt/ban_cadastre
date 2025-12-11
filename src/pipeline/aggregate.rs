@@ -71,7 +71,6 @@ pub fn step_aggregate(output_dir: &Path) -> Result<()> {
         println!("Generated france_parcelles_adresses.csv");
     }
 
-
     // 2. National QA Distance Tiers
     // Union qa_distance_tiers_*.csv
     // Schema: threshold_m, total_parcels, matched_parcels, coverage_pct

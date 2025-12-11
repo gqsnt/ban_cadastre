@@ -3,8 +3,9 @@ use crate::structures::{
     match_type_priority, AddressInput, MatchConfig, MatchOutput, MatchType, ParcelData,
     ParcelGeometry, ParcelStore,
 };
-use geo::{Centroid, Point};
+use geo::Centroid;
 use rayon::prelude::*;
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 /// Map id_parcelle -> List of PreExisting matches (distance 0)
@@ -73,7 +74,6 @@ pub fn match_parcels_and_addresses_3_steps(
                     parcel_matches.push(m);
                 }
             }
-
             parcel_matches
         })
         .collect();
@@ -81,9 +81,7 @@ pub fn match_parcels_and_addresses_3_steps(
     let mut all_matches: Vec<MatchOutput> = Vec::new();
     let mut parcels_without_match_indices = Vec::new();
 
-    let total_step1_matches: usize = step1_results.iter().map(|v| v.len()).sum();
-    all_matches.reserve(total_step1_matches);
-
+    // Flatten results and identify empty parcels
     for (idx, mut matches) in step1_results.into_iter().enumerate() {
         if matches.is_empty() {
             parcels_without_match_indices.push(idx);
@@ -103,6 +101,7 @@ pub fn match_parcels_and_addresses_3_steps(
     }
 
     // --- Step 2: Fallback (Parallel over 'parcels_without_match') ---
+    // MODIFIED: Search k-nearest neighbors to centroid, then check distance to geometry
     let step2_results: Vec<MatchOutput> = parcels_without_match_indices
         .par_iter()
         .filter_map(|&idx| {
@@ -111,14 +110,28 @@ pub fn match_parcels_and_addresses_3_steps(
                 ParcelGeometry::Polygon(ref p) => p.centroid(),
                 ParcelGeometry::MultiPolygon(ref mp) => mp.centroid(),
             };
+
             if let Some(c) = centroid {
-                if let Some(addr) = address_index.nearest_neighbor(&Point::new(c.x(), c.y())) {
-                    let dist = parcel.geom.distance_to_point(&addr.geom) as f32;
+                // Search for the 5 nearest addresses to the centroid
+                let best_candidate = address_index
+                    .tree
+                    .nearest_neighbor_iter(&[c.x(), c.y()])
+                    .take(5)
+                    .map(|node| {
+                        let addr = &address_index.addresses[node.idx];
+                        // Measure accurate distance to the parcel geometry (not centroid)
+                        let dist = parcel.geom.distance_to_point(&addr.geom);
+                        (addr, dist)
+                    })
+                    // Select the one strictly closest to the geometry
+                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+
+                if let Some((addr, dist)) = best_candidate {
                     return Some(MatchOutput::new(
                         addr.id.clone(),
                         Some(parcel.id.clone()),
                         MatchType::FallbackNearest,
-                        dist,
+                        dist as f32,
                     ));
                 }
             }
@@ -136,33 +149,23 @@ pub fn match_parcels_and_addresses_3_steps(
     all_matches.extend(step2_results);
 
     // --- Step 3: Address Rescue (Parallel over Addresses) ---
+    // MODIFIED: Removed redundant "Inside" check. Step 1 already covers all Inside matches.
     let step3_results: Vec<MatchOutput> = addresses
         .par_iter()
         .filter_map(|addr| {
             if let Some((prio, dist)) = addr_best.get(&addr.id) {
                 if *prio <= 1 {
-                    return None;
+                    return None; // Already PreExisting or Inside
                 }
                 if *prio == 2 && *dist <= config.address_max_distance_m as f32 {
-                    return None;
+                    return None; // Already BorderNear within threshold
                 }
-            }
-
-            // Search containing
-            let containers = parcel_index.find_containing(&addr.geom);
-            if !containers.is_empty() {
-                let p = containers[0];
-                return Some(MatchOutput::new(
-                    addr.id.clone(),
-                    Some(p.id.clone()),
-                    MatchType::Inside,
-                    0.0,
-                ));
             }
 
             // Neighbors
             let neighbors = parcel_index.nearest_neighbors(&addr.geom, config.num_neighbors);
             let mut best_near: Option<(&ParcelData, f64)> = None;
+
             for p in neighbors {
                 let d = p.geom.distance_to_point(&addr.geom);
                 if d <= config.address_max_distance_m
@@ -171,6 +174,7 @@ pub fn match_parcels_and_addresses_3_steps(
                     best_near = Some((p, d));
                 }
             }
+
             if let Some((p, d)) = best_near {
                 return Some(MatchOutput::new(
                     addr.id.clone(),
@@ -184,6 +188,7 @@ pub fn match_parcels_and_addresses_3_steps(
         .collect();
 
     all_matches.extend(step3_results);
+
     all_matches
 }
 

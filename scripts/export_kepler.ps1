@@ -1,10 +1,11 @@
+
 param(
     [string]$Dept      = "69",
     [string]$DataDir   = "data/ban_cadastre",
     [string]$DuckdbExe = "duckdb"
 )
 
-# Normalisation des chemins pour DuckDB (slashs)
+# 1. Setup Paths & Validation
 $baseDir       = $DataDir -replace '\\','/'
 $matchesPath   = "$baseDir/batch_results/matches_${Dept}.parquet"
 $parcelsPath   = "$baseDir/staging/parcelles_${Dept}.parquet"
@@ -13,6 +14,19 @@ $addressesPath = "$baseDir/staging/adresses_${Dept}.parquet"
 $keplerDirWin = Join-Path $DataDir "kepler"
 $keplerDir    = $keplerDirWin -replace '\\','/'
 
+Write-Host "=== Exporting Kepler Data for Dept $Dept ==="
+Write-Host "Inputs:"
+Write-Host "  - Matches: $matchesPath"
+Write-Host "  - Parcels: $parcelsPath"
+Write-Host "  - Address: $addressesPath"
+
+# Validate Inputs
+if (!(Test-Path $matchesPath) -or !(Test-Path $parcelsPath)) {
+    Write-Error "CRITICAL: Input Parquet files not found. Please run the pipeline (Link mode) first."
+    exit 1
+}
+
+# Create Output Directory
 if (!(Test-Path $keplerDirWin)) {
     New-Item -ItemType Directory -Force -Path $keplerDirWin | Out-Null
 }
@@ -22,20 +36,16 @@ $parcOut         = "$keplerDir/kepler_parcels_${Dept}.csv"
 $linksAddrOut    = "$keplerDir/kepler_links_addr_${Dept}.csv"
 $linksParcelOut  = "$keplerDir/kepler_links_parcel_${Dept}.csv"
 
+# 2. DuckDB SQL Logic
 $sql = @"
 INSTALL spatial; LOAD spatial;
 
--- Vues de base
-CREATE VIEW matches AS
-  SELECT * FROM read_parquet('$matchesPath');
+-- Load Data Views
+CREATE VIEW matches AS SELECT * FROM read_parquet('$matchesPath');
+CREATE VIEW parcels AS SELECT * FROM read_parquet('$parcelsPath');
+CREATE VIEW addresses AS SELECT * FROM read_parquet('$addressesPath');
 
-CREATE VIEW parcels AS
-  SELECT * FROM read_parquet('$parcelsPath');
-
-CREATE VIEW addresses AS
-  SELECT * FROM read_parquet('$addressesPath');
-
--- 1) Meilleur match par ADRESSE (un lien par adresse)
+-- 1) Compute Best Match per ADDRESS (Priority: PreExisting < Inside < Border < Fallback)
 CREATE OR REPLACE TABLE best_match_address AS
 WITH m_ranked AS (
   SELECT
@@ -43,13 +53,6 @@ WITH m_ranked AS (
     id_parcelle,
     match_type,
     distance_m,
-    CASE match_type
-      WHEN 'PreExisting'     THEN 0
-      WHEN 'Inside'          THEN 1
-      WHEN 'BorderNear'      THEN 2
-      WHEN 'FallbackNearest' THEN 3
-      ELSE 100
-    END AS priority,
     ROW_NUMBER() OVER (
       PARTITION BY id_ban
       ORDER BY
@@ -69,7 +72,7 @@ WITH m_ranked AS (
 )
 SELECT * FROM m_ranked WHERE rn = 1;
 
--- 2) Meilleur match par PARCELLE (un lien par parcelle)
+-- 2) Compute Best Match per PARCEL (Inverse view)
 CREATE OR REPLACE TABLE best_match_parcel AS
 WITH m_ranked AS (
   SELECT
@@ -77,13 +80,6 @@ WITH m_ranked AS (
     id_parcelle,
     match_type,
     distance_m,
-    CASE match_type
-      WHEN 'PreExisting'     THEN 0
-      WHEN 'Inside'          THEN 1
-      WHEN 'BorderNear'      THEN 2
-      WHEN 'FallbackNearest' THEN 3
-      ELSE 100
-    END AS priority,
     ROW_NUMBER() OVER (
       PARTITION BY id_parcelle
       ORDER BY
@@ -103,7 +99,7 @@ WITH m_ranked AS (
 )
 SELECT * FROM m_ranked WHERE rn = 1;
 
--- 3) Distance "best_dist" par parcelle (pour la classe 0–1500 / >1500)
+-- 3) Aggregate Parcel Stats
 CREATE OR REPLACE TABLE best_parcel_dist AS
 SELECT
   id_parcelle,
@@ -114,27 +110,14 @@ SELECT
 FROM best_match_parcel;
 
 ----------------------------------------------------
--- 4) Adresses pour Kepler (points)
---    - class_match : Inside / 0-5 / 5-15 / 15-50 / >50 / UNMATCHED
+-- 4) Export: Addresses (Points)
 ----------------------------------------------------
 COPY (
   SELECT
     a.id         AS id_ban,
     a.code_insee,
-    ST_X(
-      ST_Transform(
-        a.geom,
-        'EPSG:2154',
-        'OGC:CRS84'
-      )
-    ) AS lon,
-    ST_Y(
-      ST_Transform(
-        a.geom,
-        'EPSG:2154',
-        'OGC:CRS84'
-      )
-    ) AS lat,
+    ST_X(ST_Transform(a.geom, 'EPSG:2154', 'OGC:CRS84')) AS lon,
+    ST_Y(ST_Transform(a.geom, 'EPSG:2154', 'OGC:CRS84')) AS lat,
     b.id_parcelle,
     b.match_type,
     b.distance_m,
@@ -151,8 +134,7 @@ COPY (
 ) TO '$addrOut' (FORMAT 'CSV', HEADER);
 
 ----------------------------------------------------
--- 5) Parcelles pour Kepler (polygones)
---    - parcel_class : 0-100 / 100-250 / 250-500 / 500-1000 / 1000-1500 / >1500
+-- 5) Export: Parcels (Polygons)
 ----------------------------------------------------
 COPY (
   SELECT
@@ -167,20 +149,13 @@ COPY (
       WHEN b.best_dist <= 1500     THEN '1000-1500'
       ELSE '>1500'
     END AS parcel_class,
-    ST_AsGeoJSON(
-      ST_Transform(
-        p.geom,
-        'EPSG:2154',
-        'OGC:CRS84'
-      )
-    ) AS geometry
+    ST_AsGeoJSON(ST_Transform(p.geom, 'EPSG:2154', 'OGC:CRS84')) AS geometry
   FROM parcels p
   LEFT JOIN best_parcel_dist b ON p.id = b.id_parcelle
 ) TO '$parcOut' (FORMAT 'CSV', HEADER);
 
 ----------------------------------------------------
--- 6) Liens ADRESSE -> PARCELLE (un lien par adresse)
---    colonnes : addr_lon, addr_lat, parc_lon, parc_lat
+-- 6) Export: Links (Address -> Parcel)
 ----------------------------------------------------
 COPY (
   SELECT
@@ -197,34 +172,10 @@ COPY (
       WHEN b.distance_m <= 50  THEN '15-50'
       ELSE '>50'
     END AS class_match,
-    ST_X(
-      ST_Transform(
-        a.geom,
-        'EPSG:2154',
-        'OGC:CRS84'
-      )
-    ) AS addr_lon,
-    ST_Y(
-      ST_Transform(
-        a.geom,
-        'EPSG:2154',
-        'OGC:CRS84'
-      )
-    ) AS addr_lat,
-    ST_X(
-      ST_Transform(
-        ST_Centroid(p.geom),
-        'EPSG:2154',
-        'OGC:CRS84'
-      )
-    ) AS parc_lon,
-    ST_Y(
-      ST_Transform(
-        ST_Centroid(p.geom),
-        'EPSG:2154',
-        'OGC:CRS84'
-      )
-    ) AS parc_lat
+    ST_X(ST_Transform(a.geom, 'EPSG:2154', 'OGC:CRS84')) AS addr_lon,
+    ST_Y(ST_Transform(a.geom, 'EPSG:2154', 'OGC:CRS84')) AS addr_lat,
+    ST_X(ST_Transform(ST_Centroid(p.geom), 'EPSG:2154', 'OGC:CRS84')) AS parc_lon,
+    ST_Y(ST_Transform(ST_Centroid(p.geom), 'EPSG:2154', 'OGC:CRS84')) AS parc_lat
   FROM addresses a
   LEFT JOIN best_match_address b ON a.id = b.id_ban
   LEFT JOIN parcels p           ON p.id = b.id_parcelle
@@ -232,8 +183,7 @@ COPY (
 ) TO '$linksAddrOut' (FORMAT 'CSV', HEADER);
 
 ----------------------------------------------------
--- 7) Liens PARCELLE -> ADRESSE (un lien par parcelle)
---    colonnes : parc_lon, parc_lat, addr_lon, addr_lat
+-- 7) Export: Links (Parcel -> Address)
 ----------------------------------------------------
 COPY (
   SELECT
@@ -250,34 +200,10 @@ COPY (
       WHEN b.distance_m <= 50  THEN '15-50'
       ELSE '>50'
     END AS class_match,
-    ST_X(
-      ST_Transform(
-        ST_Centroid(p.geom),
-        'EPSG:2154',
-        'OGC:CRS84'
-      )
-    ) AS parc_lon,
-    ST_Y(
-      ST_Transform(
-        ST_Centroid(p.geom),
-        'EPSG:2154',
-        'OGC:CRS84'
-      )
-    ) AS parc_lat,
-    ST_X(
-      ST_Transform(
-        a.geom,
-        'EPSG:2154',
-        'OGC:CRS84'
-      )
-    ) AS addr_lon,
-    ST_Y(
-      ST_Transform(
-        a.geom,
-        'EPSG:2154',
-        'OGC:CRS84'
-      )
-    ) AS addr_lat
+    ST_X(ST_Transform(ST_Centroid(p.geom), 'EPSG:2154', 'OGC:CRS84')) AS parc_lon,
+    ST_Y(ST_Transform(ST_Centroid(p.geom), 'EPSG:2154', 'OGC:CRS84')) AS parc_lat,
+    ST_X(ST_Transform(a.geom, 'EPSG:2154', 'OGC:CRS84')) AS addr_lon,
+    ST_Y(ST_Transform(a.geom, 'EPSG:2154', 'OGC:CRS84')) AS addr_lat
   FROM parcels p
   LEFT JOIN best_match_parcel b ON p.id = b.id_parcelle
   LEFT JOIN addresses a         ON a.id = b.id_ban
@@ -285,4 +211,6 @@ COPY (
 ) TO '$linksParcelOut' (FORMAT 'CSV', HEADER);
 "@
 
+Write-Host "Running DuckDB Export..."
 $sql | & $DuckdbExe ":memory:" -batch
+Write-Host "Done. Files generated in $keplerDirWin"

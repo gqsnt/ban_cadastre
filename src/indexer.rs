@@ -44,15 +44,6 @@ impl<'a> DepartmentIndex<'a> {
         Self { store, tree }
     }
 
-    pub fn find_containing(&self, point: &Point<f64>) -> Vec<&'a ParcelData> {
-        let point_coords = [point.x(), point.y()];
-        self.tree
-            .locate_all_at_point(&point_coords)
-            .filter(|node| node.geom.contains_point(point))
-            .map(|node| self.store.get_parcel(node.idx))
-            .collect()
-    }
-
     pub fn nearest_neighbors(&self, point: &Point<f64>, max_count: usize) -> Vec<&'a ParcelData> {
         let point_coords = [point.x(), point.y()];
         self.tree
@@ -111,12 +102,5 @@ impl<'a> AddressIndex<'a> {
         self.tree
             .locate_in_envelope(envelope)
             .map(move |node| &addresses[node.idx])
-    }
-
-    pub fn nearest_neighbor(&self, point: &Point<f64>) -> Option<&'a AddressInput> {
-        let point_coords = [point.x(), point.y()];
-        self.tree
-            .nearest_neighbor(&point_coords)
-            .map(|node| &self.addresses[node.idx])
     }
 }
