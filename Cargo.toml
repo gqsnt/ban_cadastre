@@ -20,6 +20,9 @@ geozero = { version = "0.14", features = ["with-wkb"]}
 reqwest = { version = "0.12.25", features = ["blocking"] }
 flate2 = "1.1"
 csv = "1.4.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+colored = "3.0.0"
 
 [profile.release]
 debug = false

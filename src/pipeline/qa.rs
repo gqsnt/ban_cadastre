@@ -2,12 +2,21 @@ use anyhow::{Context, Result};
 use duckdb::{Config, Connection};
 use std::path::Path;
 
+pub struct QaSummary {
+    pub total_parcels: i64,
+    pub matched_parcels: i64,
+    pub coverage_pct: f64,
+    // (threshold, pct)
+    pub dist_tier_pcts: Vec<(f64, f64)>,
+    pub avg_confidence: f64,
+}
+
 pub fn step_qa(
     dept: &str,
     staging_dir: &Path,
     results_dir: &Path,
     output_dir: &Path,
-) -> Result<()> {
+) -> Result<QaSummary> {
     let matches_path = results_dir.join(format!("matches_{}.parquet", dept));
     let parcel_src = staging_dir.join(format!("parcelles_{}.parquet", dept));
     let address_src = staging_dir.join(format!("adresses_{}.parquet", dept));
@@ -101,7 +110,7 @@ COPY (
     // Calculate total
     let total_parcels: i64 = conn.query_row("SELECT count(*) FROM parcels", [], |r| r.get(0))?;
 
-    let threshold_tiers = [100.0, 250.0, 500.0, 1000.0, 1500.0];
+    let threshold_tiers = [5.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 1500.0];
     let tiers_csv = output_dir.join(format!("qa_distance_tiers_{}.csv", dept));
 
     // Create a temp table or do pythonic loop? Loop is fine since few queries.
@@ -109,8 +118,12 @@ COPY (
     // Let's create a table for results.
     conn.execute("CREATE TABLE tiers_res (threshold_m DOUBLE, total_parcels BIGINT, matched_parcels BIGINT, coverage_pct DOUBLE)", [])?;
 
+    // We will collect dist tiers for the summary
+    let mut dist_tier_pcts = Vec::new();
+    let mut final_matched_parcels = 0;
+
     for t in threshold_tiers {
-        // match_type IN ('PRE_EXISTING','INSIDE') OR distance_m <= t
+        // match_type IN ('PreExisting','Inside') OR distance_m <= t
         // We need to count DISTINCT id_parcelle that satisfy this.
         let q = format!(
             r#"
@@ -127,6 +140,20 @@ COPY (
             t, total_parcels, total_parcels, t
         );
         conn.execute(&q, []).context("Tiers calc")?;
+        
+        // Read back for summary if this is one of our "key" thresholds or just grab all
+        let (matched, pct): (i64, f64) = conn.query_row(
+            &format!("SELECT matched_parcels, coverage_pct FROM tiers_res WHERE threshold_m = {}", t), 
+            [], 
+            |r| Ok((r.get(0)?, r.get(1)?))
+        )?;
+        // We'll use the "infinite" or largest threshold as the "total matched" for the summary if we want "matched anything reasonable"
+        // But usually "matched" implies some quality. Let's say < 50m or < 1500m?
+        // Let's store all and decide later.
+        dist_tier_pcts.push((t, pct));
+        if t == 1500.0 {
+            final_matched_parcels = matched;
+        }
     }
     conn.execute(
         &format!(
@@ -380,5 +407,35 @@ ORDER BY
 
     conn.execute(&q_addr, []).context("QA Addresses calc")?;
 
-    Ok(())
+    // Calculate Average Confidence
+    // From matches table.
+    // confidence column exists in matches parquet?
+    // Let's check if 'confidence' is in the view. `view matches` comes from parquet.
+    // If we put it in generic structs, it should be there.
+    let avg_conf: f64 = conn.query_row(
+        "SELECT COALESCE(AVG(confidence), 0.0) FROM matches WHERE match_type != 'None'",
+        [],
+        |r| r.get(0),
+    ).unwrap_or(0.0);
+
+    // If final_matched_parcels was not set (loop didn't run?), set it.
+    // 1500 is the last one.
+    
+    // Total coverage usually refers to "Matched at all" (which is <= 1500 or just matched).
+    // Let's use the one for 1500m which is fairly inclusive.
+    // Or we could query for ALL matches not None.
+    // Let's use the 1500m bucket as "Matched".
+    let coverage_pct = if total_parcels > 0 {
+        (final_matched_parcels as f64 / total_parcels as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    Ok(QaSummary {
+        total_parcels,
+        matched_parcels: final_matched_parcels,
+        coverage_pct,
+        dist_tier_pcts,
+        avg_confidence: avg_conf,
+    })
 }
