@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{copy, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-
+use tracing::info;
 pub fn step_download(dept: &str, raw_dir: &Path, force: bool) -> Result<(PathBuf, PathBuf)> {
     // Define Paths
     let adresses_gz = raw_dir.join(format!("adresses-{}.csv.gz", dept));
@@ -27,22 +27,22 @@ pub fn step_download(dept: &str, raw_dir: &Path, force: bool) -> Result<(PathBuf
 
     // Download & Gunzip Addresses
     if force || !adresses_csv.exists() {
-        println!("Downloading Addresses for {}...", dept);
+        info!(dept=%dept, "downloading addresses");
         download_file(&url_ban, &adresses_gz)?;
-        println!("Decompressing Addresses...");
+        info!(dept=%dept, "decompressing addresses");
         gunzip_file(&adresses_gz, &adresses_csv)?;
     } else {
-        println!("Addresses for {} already exist, skipping download.", dept);
+        info!(dept=%dept, "addresses already exist; skipping download");
     }
 
     // Download & Gunzip Parcels
     if force || !parcelles_json.exists() {
-        println!("Downloading Parcels for {}...", dept);
+        info!(dept=%dept, "downloading parcels");
         download_file(&url_cadastre, &parcelles_gz)?;
-        println!("Decompressing Parcels...");
+        info!(dept=%dept, "decompressing parcels");
         gunzip_file(&parcelles_gz, &parcelles_json)?;
     } else {
-        println!("Parcels for {} already exist, skipping download.", dept);
+        info!(dept=%dept, "parcels already exist; skipping download");
     }
 
     Ok((adresses_csv, parcelles_json))

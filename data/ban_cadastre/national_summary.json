@@ -1,171 +1,223 @@
 {
   "total_parcels": 93451244,
-  "total_matched_parcels": 93451244,
-  "coverage_pct": 100.0,
-  "weighted_confidence_avg": 59.17513404101929,
-  "total_departments": 96,
+  "generated_at": "2025-12-13T20:43:15.131448600+00:00",
+  "coverage_threshold_m": 1500.0,
+  "manifest_rows_total": 96,
+  "total_matched_parcels": 92643657,
+  "coverage_pct": 99.13581995762411,
+  "weighted_confidence_avg": 61.636995504182224,
+  "total_matched_parcels_any": 92643657,
+  "coverage_any_pct": 99.13581995762411,
+  "weighted_confidence_any_avg": 61.636995504182224,
+  "expected_departments": 96,
+  "analyzed_departments": 96,
+  "invalid_manifest_rows": 0,
+  "invalid_manifest_row_numbers": [],
+  "skipped_missing_matches": 0,
+  "skipped_missing_parcels": 0,
+  "missing_matches_departments": [],
+  "missing_parcels_departments": [],
   "by_region": {
+    "Centre-Val de Loire": {
+      "total_parcels": 4569236,
+      "matched_parcels": 4560445,
+      "coverage_pct": 99.80760459735501,
+      "weighted_confidence_avg": 62.04726950988336,
+      "matched_parcels_any": 4560445,
+      "coverage_any_pct": 99.80760459735501,
+      "weighted_confidence_any_avg": 62.04726950988336,
+      "match_type_distribution": {
+        "FallbackNearest": 3122389,
+        "PreExisting": 435865,
+        "Inside": 438376,
+        "BorderNear": 563815
+      }
+    },
     "Occitanie": {
       "total_parcels": 13022018,
-      "matched_parcels": 13022018,
-      "coverage_pct": 100.0,
-      "weighted_confidence_avg": 57.907989376147384,
+      "matched_parcels": 12880225,
+      "coverage_pct": 98.91112882811251,
+      "weighted_confidence_avg": 59.99838512137793,
+      "matched_parcels_any": 12880225,
+      "coverage_any_pct": 98.91112882811251,
+      "weighted_confidence_any_avg": 59.99838512137793,
       "match_type_distribution": {
-        "PreExisting": 1105086,
-        "BorderNear": 394057,
-        "FallbackNearest": 10623839,
-        "Inside": 899036
-      }
-    },
-    "Bretagne": {
-      "total_parcels": 5472211,
-      "matched_parcels": 5472211,
-      "coverage_pct": 100.0,
-      "weighted_confidence_avg": 62.47902904328799,
-      "match_type_distribution": {
-        "PreExisting": 764015,
-        "FallbackNearest": 3913927,
-        "BorderNear": 165885,
-        "Inside": 628384
-      }
-    },
-    "Bourgogne-Franche-Comté": {
-      "total_parcels": 6441935,
-      "matched_parcels": 6441935,
-      "coverage_pct": 100.0,
-      "weighted_confidence_avg": 57.1523959804003,
-      "match_type_distribution": {
-        "PreExisting": 368002,
-        "FallbackNearest": 5298314,
-        "Inside": 445694,
-        "BorderNear": 329925
-      }
-    },
-    "Île-de-France": {
-      "total_parcels": 3706357,
-      "matched_parcels": 3706357,
-      "coverage_pct": 100.0,
-      "weighted_confidence_avg": 65.22314768922692,
-      "match_type_distribution": {
-        "FallbackNearest": 2175732,
-        "PreExisting": 228981,
-        "BorderNear": 704486,
-        "Inside": 597158
-      }
-    },
-    "Grand Est": {
-      "total_parcels": 9395350,
-      "matched_parcels": 9395350,
-      "coverage_pct": 100.0,
-      "weighted_confidence_avg": 56.9270000585396,
-      "match_type_distribution": {
-        "FallbackNearest": 7714296,
-        "PreExisting": 372622,
-        "Inside": 734399,
-        "BorderNear": 574033
+        "BorderNear": 1008022,
+        "FallbackNearest": 9680487,
+        "Inside": 830054,
+        "PreExisting": 1361662
       }
     },
     "Pays de la Loire": {
       "total_parcels": 5473830,
-      "matched_parcels": 5473830,
-      "coverage_pct": 100.0,
-      "weighted_confidence_avg": 61.62592554025244,
+      "matched_parcels": 5470271,
+      "coverage_pct": 99.93498153943399,
+      "weighted_confidence_avg": 64.06319357852655,
+      "matched_parcels_any": 5470271,
+      "coverage_any_pct": 99.93498153943399,
+      "weighted_confidence_any_avg": 64.06319357852655,
       "match_type_distribution": {
-        "BorderNear": 356629,
-        "Inside": 594082,
-        "FallbackNearest": 3939165,
-        "PreExisting": 583954
+        "BorderNear": 748293,
+        "FallbackNearest": 3480317,
+        "Inside": 600202,
+        "PreExisting": 641459
+      }
+    },
+    "Bourgogne-Franche-Comté": {
+      "total_parcels": 6441935,
+      "matched_parcels": 6363480,
+      "coverage_pct": 98.78212058954335,
+      "weighted_confidence_avg": 59.216956759508946,
+      "matched_parcels_any": 6363480,
+      "coverage_any_pct": 98.78212058954335,
+      "weighted_confidence_any_avg": 59.216956759508946,
+      "match_type_distribution": {
+        "PreExisting": 505424,
+        "BorderNear": 622344,
+        "Inside": 405654,
+        "FallbackNearest": 4830058
+      }
+    },
+    "Île-de-France": {
+      "total_parcels": 3706357,
+      "matched_parcels": 3698394,
+      "coverage_pct": 99.78515291430372,
+      "weighted_confidence_avg": 68.45525382098283,
+      "matched_parcels_any": 3698394,
+      "coverage_any_pct": 99.78515291430372,
+      "weighted_confidence_any_avg": 68.45525382098283,
+      "match_type_distribution": {
+        "FallbackNearest": 1807548,
+        "BorderNear": 994081,
+        "PreExisting": 321431,
+        "Inside": 575334
       }
     },
     "Hauts-de-France": {
       "total_parcels": 6122662,
-      "matched_parcels": 6122662,
-      "coverage_pct": 100.0,
-      "weighted_confidence_avg": 63.35363114932688,
+      "matched_parcels": 6107244,
+      "coverage_pct": 99.74818142827418,
+      "weighted_confidence_avg": 65.82756968609736,
+      "matched_parcels_any": 6107244,
+      "coverage_any_pct": 99.74818142827418,
+      "weighted_confidence_any_avg": 65.82756968609736,
       "match_type_distribution": {
-        "Inside": 655427,
-        "PreExisting": 629967,
-        "FallbackNearest": 4033060,
-        "BorderNear": 804208
+        "Inside": 614368,
+        "PreExisting": 790028,
+        "BorderNear": 1127075,
+        "FallbackNearest": 3575773
       }
     },
-    "Normandie": {
-      "total_parcels": 3883144,
-      "matched_parcels": 3883144,
-      "coverage_pct": 100.0,
-      "weighted_confidence_avg": 63.22173475925693,
+    "Grand Est": {
+      "total_parcels": 9395350,
+      "matched_parcels": 9217110,
+      "coverage_pct": 98.10289132389958,
+      "weighted_confidence_avg": 59.10618729731988,
+      "matched_parcels_any": 9217110,
+      "coverage_any_pct": 98.10289132389958,
+      "weighted_confidence_any_avg": 59.10618729731988,
       "match_type_distribution": {
-        "Inside": 663726,
-        "FallbackNearest": 2620009,
-        "PreExisting": 342784,
-        "BorderNear": 256625
+        "BorderNear": 1047920,
+        "PreExisting": 529612,
+        "Inside": 693296,
+        "FallbackNearest": 6946282
       }
     },
     "Auvergne-Rhône-Alpes": {
       "total_parcels": 14852740,
-      "matched_parcels": 14852740,
-      "coverage_pct": 100.0,
-      "weighted_confidence_avg": 57.16995719308357,
+      "matched_parcels": 14696454,
+      "coverage_pct": 98.94776317366359,
+      "weighted_confidence_avg": 59.446460350231426,
+      "matched_parcels_any": 14696454,
+      "coverage_any_pct": 98.94776317366359,
+      "weighted_confidence_any_avg": 59.446460350231426,
       "match_type_distribution": {
-        "BorderNear": 407409,
-        "PreExisting": 1027982,
-        "FallbackNearest": 12343890,
-        "Inside": 1073459
-      }
-    },
-    "Nouvelle-Aquitaine": {
-      "total_parcels": 14523780,
-      "matched_parcels": 14523780,
-      "coverage_pct": 100.0,
-      "weighted_confidence_avg": 58.05337797735851,
-      "match_type_distribution": {
-        "FallbackNearest": 11773903,
-        "PreExisting": 1241655,
-        "BorderNear": 537441,
-        "Inside": 970781
-      }
-    },
-    "Provence-Alpes-Côte d'Azur": {
-      "total_parcels": 4951249,
-      "matched_parcels": 4951249,
-      "coverage_pct": 100.0,
-      "weighted_confidence_avg": 60.15346228800046,
-      "match_type_distribution": {
-        "Inside": 526715,
-        "PreExisting": 493821,
-        "BorderNear": 151647,
-        "FallbackNearest": 3779066
-      }
-    },
-    "Centre-Val de Loire": {
-      "total_parcels": 4569236,
-      "matched_parcels": 4569236,
-      "coverage_pct": 100.0,
-      "weighted_confidence_avg": 59.40754428092574,
-      "match_type_distribution": {
-        "PreExisting": 298548,
-        "BorderNear": 304194,
-        "Inside": 474542,
-        "FallbackNearest": 3491952
+        "BorderNear": 1196517,
+        "FallbackNearest": 11170320,
+        "PreExisting": 1335047,
+        "Inside": 994570
       }
     },
     "Corse": {
       "total_parcels": 1036732,
-      "matched_parcels": 1036732,
-      "coverage_pct": 100.0,
-      "weighted_confidence_avg": 54.944315406488855,
+      "matched_parcels": 999452,
+      "coverage_pct": 96.4040851444732,
+      "weighted_confidence_avg": 57.40954042815463,
+      "matched_parcels_any": 999452,
+      "coverage_any_pct": 96.4040851444732,
+      "weighted_confidence_any_avg": 57.40954042815463,
       "match_type_distribution": {
-        "Inside": 29823,
-        "PreExisting": 76587,
-        "BorderNear": 3527,
-        "FallbackNearest": 926795
+        "FallbackNearest": 828633,
+        "BorderNear": 37947,
+        "Inside": 21858,
+        "PreExisting": 111014
+      }
+    },
+    "Bretagne": {
+      "total_parcels": 5472211,
+      "matched_parcels": 5471587,
+      "coverage_pct": 99.98859693092975,
+      "weighted_confidence_avg": 65.92960141180247,
+      "matched_parcels_any": 5471587,
+      "coverage_any_pct": 99.98859693092975,
+      "weighted_confidence_any_avg": 65.92960141180247,
+      "match_type_distribution": {
+        "BorderNear": 594807,
+        "Inside": 569980,
+        "FallbackNearest": 3334507,
+        "PreExisting": 972293
+      }
+    },
+    "Nouvelle-Aquitaine": {
+      "total_parcels": 14523780,
+      "matched_parcels": 14487084,
+      "coverage_pct": 99.74733850278646,
+      "weighted_confidence_avg": 60.135300520104664,
+      "matched_parcels_any": 14487084,
+      "coverage_any_pct": 99.74733850278646,
+      "weighted_confidence_any_avg": 60.135300520104664,
+      "match_type_distribution": {
+        "Inside": 901994,
+        "BorderNear": 1318946,
+        "PreExisting": 1502384,
+        "FallbackNearest": 10763760
+      }
+    },
+    "Provence-Alpes-Côte d'Azur": {
+      "total_parcels": 4951249,
+      "matched_parcels": 4810127,
+      "coverage_pct": 97.14976968437661,
+      "weighted_confidence_avg": 63.83547877218211,
+      "matched_parcels_any": 4810127,
+      "coverage_any_pct": 97.14976968437661,
+      "weighted_confidence_any_avg": 63.83547877218211,
+      "match_type_distribution": {
+        "Inside": 482111,
+        "FallbackNearest": 3174062,
+        "PreExisting": 694200,
+        "BorderNear": 459754
+      }
+    },
+    "Normandie": {
+      "total_parcels": 3883144,
+      "matched_parcels": 3881784,
+      "coverage_pct": 99.96497683320526,
+      "weighted_confidence_avg": 66.27169105751376,
+      "matched_parcels_any": 3881784,
+      "coverage_any_pct": 99.96497683320526,
+      "weighted_confidence_any_avg": 66.27169105751376,
+      "match_type_distribution": {
+        "Inside": 638832,
+        "PreExisting": 427925,
+        "FallbackNearest": 2220655,
+        "BorderNear": 594372
       }
     }
   },
   "match_type_distribution": {
-    "PreExisting": 7534004,
-    "FallbackNearest": 72633948,
-    "BorderNear": 4990066,
-    "Inside": 8293226
+    "Inside": 7766629,
+    "FallbackNearest": 64934791,
+    "BorderNear": 10313893,
+    "PreExisting": 9628344
   }
 }

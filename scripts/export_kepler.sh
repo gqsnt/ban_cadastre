@@ -1,95 +1,83 @@
-param(
-    [Parameter()][string]$Dept      = "69",
-    [Parameter()][string]$DataDir   = "data/ban_cadastre",
-    [Parameter()][string]$DuckdbExe = "duckdb"
-)
+#!/usr/bin/env bash
+set -euo pipefail
 
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
+DEPT="69"
+DATA_DIR="data/ban_cadastre"
+DUCKDB_EXE="duckdb"
 
-function To-DuckPath([string]$p) {
-    return (($p -replace '\\','/') -replace "'","''")
+usage() {
+  cat <<EOF
+Usage: scripts/export_kepler.sh [--dept <DEP>] [--data-dir <DIR>] [--duckdb <PATH>]
+EOF
 }
 
-Write-Host "=== Kepler export (dept=$Dept) ==="
-
-$matchesPathWin   = Join-Path $DataDir (Join-Path "batch_results" ("matches_{0}.parquet" -f $Dept))
-$parcelsPathWin   = Join-Path $DataDir (Join-Path "staging"       ("parcelles_{0}.parquet" -f $Dept))
-$addressesPathWin = Join-Path $DataDir (Join-Path "staging"       ("adresses_{0}.parquet" -f $Dept))
-
-if (!(Test-Path -LiteralPath $matchesPathWin))   { throw "Missing input: $matchesPathWin" }
-if (!(Test-Path -LiteralPath $parcelsPathWin))   { throw "Missing input: $parcelsPathWin" }
-if (!(Test-Path -LiteralPath $addressesPathWin)) { throw "Missing input: $addressesPathWin" }
-
-$keplerDirWin = Join-Path $DataDir "kepler"
-if (!(Test-Path -LiteralPath $keplerDirWin)) {
-    New-Item -ItemType Directory -Force -Path $keplerDirWin | Out-Null
+sql_escape_path() {
+  local p="$1"
+  p="${p//\\/\/}"
+  p="${p//\'/\'\'}"
+  printf "%s" "$p"
 }
 
-$matchesPath   = To-DuckPath $matchesPathWin
-$parcelsPath   = To-DuckPath $parcelsPathWin
-$addressesPath = To-DuckPath $addressesPathWin
-$keplerDir     = To-DuckPath $keplerDirWin
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dept|-d) DEPT="$2"; shift 2 ;;
+    --data-dir) DATA_DIR="$2"; shift 2 ;;
+    --duckdb) DUCKDB_EXE="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; usage; exit 2 ;;
+  esac
+done
 
-$addrOut        = "$keplerDir/kepler_addresses_${Dept}.csv"
-$parcOut        = "$keplerDir/kepler_parcels_${Dept}.csv"
-$linksAddrOut   = "$keplerDir/kepler_links_addr_${Dept}.csv"
-$linksParcelOut = "$keplerDir/kepler_links_parcel_${Dept}.csv"
+matches_path="${DATA_DIR}/batch_results/matches_${DEPT}.parquet"
+parcels_path="${DATA_DIR}/staging/parcelles_${DEPT}.parquet"
+addresses_path="${DATA_DIR}/staging/adresses_${DEPT}.parquet"
+kepler_dir="${DATA_DIR}/kepler"
 
-Write-Host "Inputs:"
-Write-Host "  - $matchesPathWin"
-Write-Host "  - $parcelsPathWin"
-Write-Host "  - $addressesPathWin"
-Write-Host "Outputs:"
-Write-Host "  - $keplerDirWin\kepler_addresses_${Dept}.csv"
-Write-Host "  - $keplerDirWin\kepler_parcels_${Dept}.csv"
-Write-Host "  - $keplerDirWin\kepler_links_addr_${Dept}.csv"
-Write-Host "  - $keplerDirWin\kepler_links_parcel_${Dept}.csv"
+[[ -f "$matches_path" ]]   || { echo "Missing input: $matches_path" >&2; exit 1; }
+[[ -f "$parcels_path" ]]   || { echo "Missing input: $parcels_path" >&2; exit 1; }
+[[ -f "$addresses_path" ]] || { echo "Missing input: $addresses_path" >&2; exit 1; }
 
-# Detect geom storage type (GEOMETRY vs BLOB/WKB)
-$detectSqlParcels = @"
+mkdir -p "$kepler_dir"
+
+matches_sql="$(sql_escape_path "$matches_path")"
+parcels_sql="$(sql_escape_path "$parcels_path")"
+addresses_sql="$(sql_escape_path "$addresses_path")"
+kepler_sql="$(sql_escape_path "$kepler_dir")"
+
+addr_out="${kepler_sql}/kepler_addresses_${DEPT}.csv"
+parc_out="${kepler_sql}/kepler_parcels_${DEPT}.csv"
+links_addr_out="${kepler_sql}/kepler_links_addr_${DEPT}.csv"
+links_parcel_out="${kepler_sql}/kepler_links_parcel_${DEPT}.csv"
+
+parcels_geom_type="$("$DUCKDB_EXE" ":memory:" -csv -noheader <<SQL
 INSTALL spatial; LOAD spatial;
-SELECT typeof(geom) FROM read_parquet('$parcelsPath') LIMIT 1;
-"@
-$parcelsGeomType = ($detectSqlParcels | & $DuckdbExe ":memory:" -csv -noheader).Trim()
-if ($LASTEXITCODE -ne 0) { throw "DuckDB detect failed (parcels)" }
-
-$detectSqlAddresses = @"
+SELECT typeof(geom) FROM read_parquet('${parcels_sql}') LIMIT 1;
+SQL
+)"
+addresses_geom_type="$("$DUCKDB_EXE" ":memory:" -csv -noheader <<SQL
 INSTALL spatial; LOAD spatial;
-SELECT typeof(geom) FROM read_parquet('$addressesPath') LIMIT 1;
-"@
-$addressesGeomType = ($detectSqlAddresses | & $DuckdbExe ":memory:" -csv -noheader).Trim()
-if ($LASTEXITCODE -ne 0) { throw "DuckDB detect failed (addresses)" }
+SELECT typeof(geom) FROM read_parquet('${addresses_sql}') LIMIT 1;
+SQL
+)"
 
-$parcelsGeomExpr = "ST_GeomFromWKB(geom)"
-if ($parcelsGeomType -like "*GEOMETRY*") {
-    $parcelsGeomExpr = "geom"
-}
+parcels_geom_expr="ST_GeomFromWKB(geom)"
+addresses_geom_expr="ST_GeomFromWKB(geom)"
+[[ "$parcels_geom_type" == *GEOMETRY* ]]   && parcels_geom_expr="geom"
+[[ "$addresses_geom_type" == *GEOMETRY* ]] && addresses_geom_expr="geom"
 
-$addressesGeomExpr = "ST_GeomFromWKB(geom)"
-if ($addressesGeomType -like "*GEOMETRY*") {
-    $addressesGeomExpr = "geom"
-}
-
-$sql = @"
+"$DUCKDB_EXE" ":memory:" -batch <<SQL
 INSTALL spatial; LOAD spatial;
 
 CREATE OR REPLACE VIEW matches AS
-SELECT * FROM read_parquet('$matchesPath');
+SELECT * FROM read_parquet('${matches_sql}');
 
 CREATE OR REPLACE VIEW parcels AS
-SELECT
-  id,
-  code_insee,
-  $parcelsGeomExpr AS geom
-FROM read_parquet('$parcelsPath');
+SELECT id, code_insee, ${parcels_geom_expr} AS geom
+FROM read_parquet('${parcels_sql}');
 
 CREATE OR REPLACE VIEW addresses AS
-SELECT
-  id,
-  code_insee,
-  $addressesGeomExpr AS geom
-FROM read_parquet('$addressesPath');
+SELECT id, code_insee, ${addresses_geom_expr} AS geom
+FROM read_parquet('${addresses_sql}');
 
 CREATE OR REPLACE MACRO match_prio(mt) AS (
   CASE mt
@@ -128,11 +116,7 @@ CREATE OR REPLACE MACRO parcel_band(mt, d) AS (
 CREATE OR REPLACE TABLE best_match_address AS
 WITH ranked AS (
   SELECT
-    id_ban,
-    id_parcelle,
-    match_type,
-    distance_m,
-    confidence,
+    id_ban, id_parcelle, match_type, distance_m, confidence,
     ROW_NUMBER() OVER (
       PARTITION BY id_ban
       ORDER BY match_prio(match_type) ASC, distance_m ASC, id_parcelle ASC
@@ -147,11 +131,7 @@ SELECT * FROM ranked WHERE rn = 1;
 CREATE OR REPLACE TABLE best_match_parcel AS
 WITH ranked AS (
   SELECT
-    id_parcelle,
-    id_ban,
-    match_type,
-    distance_m,
-    confidence,
+    id_parcelle, id_ban, match_type, distance_m, confidence,
     ROW_NUMBER() OVER (
       PARTITION BY id_parcelle
       ORDER BY match_prio(match_type) ASC, distance_m ASC, id_ban ASC
@@ -176,7 +156,7 @@ COPY (
     addr_band(b.match_type, b.distance_m) AS class_match
   FROM addresses a
   LEFT JOIN best_match_address b ON a.id = b.id_ban
-) TO '$addrOut' (FORMAT 'CSV', HEADER);
+) TO '${addr_out}' (FORMAT 'CSV', HEADER);
 
 COPY (
   SELECT
@@ -190,7 +170,7 @@ COPY (
     ST_AsGeoJSON(ST_Transform(p.geom, 'EPSG:2154', 'OGC:CRS84')) AS geometry
   FROM parcels p
   LEFT JOIN best_match_parcel b ON p.id = b.id_parcelle
-) TO '$parcOut' (FORMAT 'CSV', HEADER);
+) TO '${parc_out}' (FORMAT 'CSV', HEADER);
 
 COPY (
   SELECT
@@ -208,7 +188,7 @@ COPY (
   FROM best_match_address b
   JOIN addresses a ON a.id = b.id_ban
   JOIN parcels   p ON p.id = b.id_parcelle
-) TO '$linksAddrOut' (FORMAT 'CSV', HEADER);
+) TO '${links_addr_out}' (FORMAT 'CSV', HEADER);
 
 COPY (
   SELECT
@@ -226,11 +206,5 @@ COPY (
   FROM best_match_parcel b
   JOIN parcels   p ON p.id = b.id_parcelle
   JOIN addresses a ON a.id = b.id_ban
-) TO '$linksParcelOut' (FORMAT 'CSV', HEADER);
-"@
-
-Write-Host "Running DuckDB..."
-$sql | & $DuckdbExe ":memory:" -batch
-if ($LASTEXITCODE -ne 0) { throw "DuckDB export failed" }
-
-Write-Host "OK: $keplerDirWin"
+) TO '${links_parcel_out}' (FORMAT 'CSV', HEADER);
+SQL

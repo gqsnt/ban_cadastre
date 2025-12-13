@@ -55,40 +55,34 @@ impl MatchWriter {
         }
 
         let len = self.batch_buffer.len();
-        let mut id_ban_builder = Vec::with_capacity(len);
-        let mut id_parcelle_builder = Vec::with_capacity(len);
-        let mut match_type_builder = Vec::with_capacity(len);
-        let mut distance_m_builder = Vec::with_capacity(len);
-        let mut confidence_builder = Vec::with_capacity(len);
 
-        for m in &self.batch_buffer {
-            id_ban_builder.push(m.id_ban.clone());
-            id_parcelle_builder.push(m.id_parcelle.clone());
+        // Move out of buffer (no clones).
+        let mut id_ban_builder: Vec<String> = Vec::with_capacity(len);
+        let mut id_parcelle_builder: Vec<Option<String>> = Vec::with_capacity(len);
+        let mut match_type_builder: Vec<String> = Vec::with_capacity(len);
+        let mut distance_m_builder: Vec<f32> = Vec::with_capacity(len);
+        let mut confidence_builder: Vec<u32> = Vec::with_capacity(len);
+
+        for m in self.batch_buffer.drain(..) {
+            id_ban_builder.push(m.id_ban);
+            id_parcelle_builder.push(m.id_parcelle);
             match_type_builder.push(m.match_type.to_string());
             distance_m_builder.push(m.distance_m);
             confidence_builder.push(m.confidence);
         }
 
-        let id_ban_array = StringArray::from(id_ban_builder);
-        let id_parcelle_array = StringArray::from(id_parcelle_builder); // Handle Option automatically? No, StringArray::from(Vec<Option<String>>)
-        let match_type_array = StringArray::from(match_type_builder);
-        let distance_m_array = Float32Array::from(distance_m_builder);
-        let confidence_array = UInt32Array::from(confidence_builder);
-
         let batch = RecordBatch::try_new(
             self.schema.clone(),
             vec![
-                Arc::new(id_ban_array),
-                Arc::new(id_parcelle_array),
-                Arc::new(match_type_array),
-                Arc::new(distance_m_array),
-                Arc::new(confidence_array),
+                Arc::new(StringArray::from(id_ban_builder)),
+                Arc::new(StringArray::from(id_parcelle_builder)),
+                Arc::new(StringArray::from(match_type_builder)),
+                Arc::new(Float32Array::from(distance_m_builder)),
+                Arc::new(UInt32Array::from(confidence_builder)),
             ],
         )?;
 
         self.writer.write(&batch)?;
-        self.batch_buffer.clear();
-
         Ok(())
     }
 

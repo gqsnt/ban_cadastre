@@ -6,84 +6,114 @@ use crate::writer::MatchWriter;
 use anyhow::Result;
 use std::time::Instant;
 
+use tracing::{info, warn};
+
+fn log_crs_sanity_addresses(xs: &[f64], ys: &[f64]) {
+    if xs.is_empty() || ys.is_empty() {
+        return;
+    }
+    let max_abs_x = xs.iter().map(|v| v.abs()).fold(0.0, f64::max);
+    let max_abs_y = ys.iter().map(|v| v.abs()).fold(0.0, f64::max);
+    // Heuristic: lon/lat degrees are usually within ~[-180,180] and [-90,90].
+    if max_abs_x <= 200.0 && max_abs_y <= 100.0 {
+        warn!(
+            max_abs_x,
+            max_abs_y, "CRS sanity: coordinates look like degrees; expected EPSG:2154 meters"
+        );
+    }
+}
 pub fn run_link(args: LinkArgs) -> Result<()> {
-    println!("Starting link mode...");
-    println!("Input Addresses: {:?}", args.input_adresses);
-    println!("Input Parcels: {:?}", args.input_parcelles);
-    println!("Output: {:?}", args.output);
+    info!("starting link mode");
+    info!(input_addresses=?args.input_adresses, "input addresses");
+    info!(input_parcels=?args.input_parcelles, "input parcels");
+    info!(output=?args.output, "output");
+
+    if let Some(parent) = args.output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
 
     let start_load = Instant::now();
-
-    // 1. Load Data
     let mut parcels = load_parcels(&args.input_parcelles)?;
     let mut addresses = load_addresses(&args.input_adresses)?;
 
-    println!(
-        "Loaded {} parcels and {} addresses in {:?}",
-        parcels.len(),
-        addresses.len(),
-        start_load.elapsed()
+    info!(
+        parcels = parcels.len(),
+        addresses = addresses.len(),
+        elapsed_ms = start_load.elapsed().as_millis(),
+        "loaded inputs"
     );
 
-    // 2. Filter (Optional CLI options)
+    // CRS sanity (heuristic)
+    {
+        let mut ax = Vec::with_capacity(addresses.len());
+        let mut ay = Vec::with_capacity(addresses.len());
+        for a in &addresses {
+            ax.push(a.geom.x());
+            ay.push(a.geom.y());
+        }
+        log_crs_sanity_addresses(&ax, &ay);
+    }
+
     if let Some(code) = &args.filter_commune {
-        println!("Filtering for commune: {}", code);
+        info!(commune=%code, "filtering by commune");
         parcels.retain(|p| p.code_insee == *code);
         addresses.retain(|a| a.code_insee == *code);
-        println!(
-            "Filtered: {} parcels, {} addresses",
-            parcels.len(),
-            addresses.len()
+        info!(
+            parcels = parcels.len(),
+            addresses = addresses.len(),
+            "after filter"
         );
     }
 
     if let Some(limit) = args.limit_addresses {
         if addresses.len() > limit {
-            println!("Limiting addresses to {} (first ones)", limit);
+            info!(limit, "limiting addresses (truncate)");
             addresses.truncate(limit);
         }
     }
 
     if parcels.is_empty() || addresses.is_empty() {
-        println!("Warning: valid input data is empty after loading/filtering. writing empty file.");
+        warn!("input data is empty after loading/filtering; writing empty matches file");
         let writer = MatchWriter::new(&args.output, args.batch_size)?;
         writer.close()?;
         return Ok(());
     }
 
-    // 3. Match
     let config = MatchConfig {
-        num_neighbors: args.num_neighbors,
-        address_max_distance_m: args.distance_threshold, // Using the same threshold for rescue max distance
+        address_max_distance_m: args.distance_threshold,
+
+        // defaults for Step3
+        fallback_max_distance_m: 1500.0,
+        fallback_envelope_expand_m: 50.0,
     };
 
-    println!("Running matcher with config: {:?}", config);
+    info!(?config, "running matcher");
     let start_match = Instant::now();
     let matches = match_parcels_and_addresses_3_steps(&parcels, &addresses, &config);
-    println!(
-        "Matching completed in {:?}. Generated {} matches.",
-        start_match.elapsed(),
-        matches.len()
+    info!(
+        elapsed_ms = start_match.elapsed().as_millis(),
+        matches = matches.len(),
+        "matching completed"
     );
 
-    // 4. Statistics
     let mut counts = std::collections::HashMap::new();
     for m in &matches {
         *counts.entry(m.match_type.to_string()).or_insert(0) += 1;
     }
-    println!("Match Stats:");
+    info!("match stats:");
     for (k, v) in counts {
-        println!("  {}: {}", k, v);
+        info!(match_type=%k, count=v, "match_type count");
     }
 
-    // 5. Write Output
     let start_write = Instant::now();
     let mut writer = MatchWriter::new(&args.output, args.batch_size)?;
     for m in matches {
         writer.write(m)?;
     }
     writer.close()?;
-    println!("Writing completed in {:?}", start_write.elapsed());
-
+    info!(
+        elapsed_ms = start_write.elapsed().as_millis(),
+        "writing completed"
+    );
     Ok(())
 }

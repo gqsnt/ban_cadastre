@@ -11,22 +11,24 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Match a single department
+    /// Match a single scope (one-off / debugging)
     Link(LinkArgs),
     /// Run the full pipeline for multiple departments
     Pipeline(PipelineArgs),
     /// Analyze results and generate reports
     Analyze(AnalyzeArgs),
+    /// Show pipeline status from batch_state.json
+    Status(StatusArgs),
 }
 
 #[derive(Args, Debug)]
 pub struct LinkArgs {
-    /// Path to BAN addresses GeoParquet (or compatible)
-    #[arg(long)]
+    /// Path to prepared addresses Parquet (columns: id, code_insee, geom(WKB EPSG:2154), existing_link)
+    #[arg(long, alias = "addresses")]
     pub input_adresses: PathBuf,
 
-    /// Path to Parcels GeoParquet
-    #[arg(long)]
+    /// Path to prepared parcels Parquet (columns: id, code_insee, geom(WKB EPSG:2154))
+    #[arg(long, alias = "parcels")]
     pub input_parcelles: PathBuf,
 
     /// Output path for matches Parquet
@@ -51,7 +53,8 @@ pub struct LinkArgs {
 
 #[derive(Args, Debug)]
 pub struct PipelineArgs {
-    #[arg(long)]
+    /// Departments manifest CSV path (expects a first column containing department code; header allowed)
+    #[arg(long, alias = "manifest")]
     pub departments_file: PathBuf,
 
     #[arg(long)]
@@ -66,7 +69,8 @@ pub struct PipelineArgs {
     #[arg(long, default_value_t = false)]
     pub force: bool,
 
-    #[arg(long, default_value_t = false)]
+    /// Skip matching step if matches_XX.parquet already exists
+    #[arg(long, default_value_t = false, alias = "quick-qa")]
     pub quick_qa: bool,
 
     #[arg(long)]
@@ -74,6 +78,10 @@ pub struct PipelineArgs {
 
     #[arg(long)]
     pub filter_commune: Option<String>,
+
+    /// Return exit code 2 if any department failed (partial run)
+    #[arg(long, default_value_t = false)]
+    pub strict: bool,
 }
 
 #[derive(Args, Debug)]
@@ -86,4 +94,14 @@ pub struct AnalyzeArgs {
 
     #[arg(long)]
     pub output_dir: Option<PathBuf>,
+    /// Return exit code 2 if inputs are incomplete (missing matches/parcels)
+    #[arg(long, default_value_t = false)]
+    pub strict: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct StatusArgs {
+    /// Data directory containing batch_state.json
+    #[arg(long)]
+    pub data_dir: PathBuf,
 }

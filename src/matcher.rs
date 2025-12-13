@@ -1,14 +1,12 @@
 use crate::indexer::{AddressIndex, DepartmentIndex};
-use crate::structures::{
-    match_type_priority, AddressInput, MatchConfig, MatchOutput, MatchType, ParcelData,
-    ParcelGeometry, ParcelStore,
-};
-use geo::Centroid;
+use crate::structures::{AddressInput, MatchConfig, MatchOutput, MatchType, ParcelData, ParcelStore};
+use geo::{Point};
 use rayon::prelude::*;
+use rstar::{ PointDistance, AABB};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
-/// Map id_parcelle -> List of PreExisting matches (distance 0)
+
 pub type PreexistingMap = HashMap<String, Vec<MatchOutput>>;
 
 pub fn build_preexisting_map(
@@ -16,9 +14,10 @@ pub fn build_preexisting_map(
     known_parcels: &HashSet<&str>,
 ) -> PreexistingMap {
     let mut map: PreexistingMap = HashMap::new();
+
     for addr in addresses {
         if let Some(links) = &addr.existing_link {
-            for parcel_id in links.split(';') {
+            for parcel_id in links.split(|c| c == ';' || c == '|' || c == ',') {
                 let pid = parcel_id.trim();
                 if pid.is_empty() {
                     continue;
@@ -27,233 +26,276 @@ pub fn build_preexisting_map(
                     let m = MatchOutput::new(
                         addr.id.clone(),
                         Some(pid.to_owned()),
-                        MatchType::PreExisting,
                         0.0,
+                        MatchType::PreExisting,
                     );
                     map.entry(pid.to_owned()).or_default().push(m);
                 }
             }
         }
     }
+
     map
 }
+
+fn expand_aabb(env: &AABB<[f64; 2]>, margin: f64) -> AABB<[f64; 2]> {
+    let lo = env.lower();
+    let hi = env.upper();
+    AABB::from_corners(
+        [lo[0] - margin, lo[1] - margin],
+        [hi[0] + margin, hi[1] + margin],
+    )
+}
+
+const INSIDE_EPS_M: f64 = 0.01;
+
+fn is_inside_or_on_border(parcel: &ParcelData, p: &Point<f64>) -> bool {
+    // 0 quand inside OU sur la frontière
+    let d = parcel.geom.distance_to_point(p);
+    d.is_finite() && d <= INSIDE_EPS_M
+}
+
+
+
 
 pub fn match_parcels_and_addresses_3_steps(
     parcels: &dyn ParcelStore,
     addresses: &[AddressInput],
     config: &MatchConfig,
 ) -> Vec<MatchOutput> {
-    // 1. Build indices and lookups
     let known_parcels: HashSet<&str> = parcels.iter().map(|p| p.id.as_str()).collect();
     let preexisting_map = build_preexisting_map(addresses, &known_parcels);
+
     let parcel_index = DepartmentIndex::build(parcels);
     let address_index = AddressIndex::build(addresses);
 
-    // --- Step 1: INSIDE + PRE_EXISTING (Parallel over Parcel indices) ---
+    // --- Step 1: INSIDE + PRE_EXISTING ---
     let step1_results: Vec<Vec<MatchOutput>> = (0..parcels.len())
         .into_par_iter()
         .map(|idx| {
             let parcel = parcels.get_parcel(idx);
-            let mut parcel_matches = Vec::new();
+            let mut out = Vec::new();
+            let mut strict_addr_ids: HashSet<String> = HashSet::new();
 
-            // A. Pre-existing
             if let Some(pre) = preexisting_map.get(&parcel.id) {
-                parcel_matches.extend(pre.iter().cloned());
-            }
-
-            // B. Inside
-            let candidates = address_index.locate_in_envelope(&parcel.envelope);
-            for addr in candidates {
-                if parcel.geom.contains_point(&addr.geom) {
-                    let m = MatchOutput::new(
-                        addr.id.clone(),
-                        Some(parcel.id.clone()),
-                        MatchType::Inside,
-                        0.0,
-                    );
-                    parcel_matches.push(m);
+                for m in pre {
+                    strict_addr_ids.insert(m.id_ban.clone());
+                    out.push(m.clone());
                 }
             }
-            parcel_matches
+
+            for addr in address_index.locate_in_envelope(&parcel.envelope) {
+                if strict_addr_ids.contains(&addr.id) {
+                    continue;
+                }
+                if is_inside_or_on_border(parcel, &addr.geom) {
+                    out.push(MatchOutput::new(
+                        addr.id.clone(),
+                        Some(parcel.id.clone()),
+                        0.0,
+                        MatchType::Inside,
+                    ));
+                }
+            }
+
+            out
         })
         .collect();
 
     let mut all_matches: Vec<MatchOutput> = Vec::new();
-    let mut parcels_without_match_indices = Vec::new();
-
-    // Flatten results and identify empty parcels
-    for (idx, mut matches) in step1_results.into_iter().enumerate() {
-        if matches.is_empty() {
-            parcels_without_match_indices.push(idx);
-        } else {
-            all_matches.append(&mut matches);
-        }
+    all_matches.reserve(step1_results.iter().map(|v| v.len()).sum::<usize>());
+    for mut v in step1_results {
+        all_matches.append(&mut v);
     }
 
-    // Best match per address for rescue step
-    let mut addr_best: HashMap<String, (u8, f32)> = HashMap::with_capacity(addresses.len());
+    // Track which parcels already have at least one match (any type) after step1/step2
+    let mut parcel_has_match: Vec<bool> = vec![false; parcels.len()];
+    // Map parcel_id -> idx for fast marking from Step2 results
+    let mut parcel_idx_by_id: HashMap<String, usize> = HashMap::with_capacity(parcels.len());
+    for (idx, p) in parcels.iter().enumerate() {
+        parcel_idx_by_id.insert(p.id.clone(), idx);
+    }
+    // Mark parcels matched from Step1
     for m in &all_matches {
-        let prio = match_type_priority(&m.match_type);
-        let entry = addr_best.entry(m.id_ban.clone()).or_insert((100, f32::MAX));
-        if prio < entry.0 || (prio == entry.0 && m.distance_m < entry.1) {
-            *entry = (prio, m.distance_m);
+        if let Some(pid) = &m.id_parcelle {
+            if let Some(&idx) = parcel_idx_by_id.get(pid) {
+                parcel_has_match[idx] = true;
+            }
         }
     }
 
-    // --- Step 2: Fallback (Parallel over 'parcels_without_match') ---
-    // MODIFIED: Search k-nearest neighbors to centroid, then check distance to geometry
-    let step2_results: Vec<MatchOutput> = parcels_without_match_indices
+    // STEP 2 (address-centric): BORDER_NEAR, 0 < d <= address_max_distance_m
+    let step2_results: Vec<MatchOutput> = addresses
         .par_iter()
-        .filter_map(|&idx| {
-            let parcel = parcels.get_parcel(idx);
-            let centroid = match parcel.geom {
-                ParcelGeometry::Polygon(ref p) => p.centroid(),
-                ParcelGeometry::MultiPolygon(ref mp) => mp.centroid(),
-            };
+        .filter_map(|addr| {
 
-            if let Some(c) = centroid {
-                // Search for the 5 nearest addresses to the centroid
-                let best_candidate = address_index
-                    .tree
-                    .nearest_neighbor_iter(&[c.x(), c.y()])
-                    .take(5)
-                    .map(|node| {
-                        let addr = &address_index.addresses[node.idx];
-                        // Measure accurate distance to the parcel geometry (not centroid)
-                        let dist = parcel.geom.distance_to_point(&addr.geom);
-                        (addr, dist)
-                    })
-                    // Select the one strictly closest to the geometry
-                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+            let mut best: Option<(&ParcelData, f64)> = None;
+            let point_coords = [addr.geom.x(), addr.geom.y()];
+            let thr = config.address_max_distance_m;
+            let thr2 = thr * thr;
 
-                if let Some((addr, dist)) = best_candidate {
-                    return Some(MatchOutput::new(
-                        addr.id.clone(),
-                        Some(parcel.id.clone()),
-                        MatchType::FallbackNearest,
-                        dist as f32,
-                    ));
+            for node in parcel_index.tree.nearest_neighbor_iter(&point_coords) {
+                if node.distance_2(&point_coords) > thr2 {
+                    break;
+                }
+                let p = parcel_index.get_parcel(node.idx);
+                let d = p.geom.distance_to_point(&addr.geom);
+                if !d.is_finite() {
+                    continue;
+                }
+                // 0 < d <= 50  (exclude distance==0 which is "Inside")
+                if d <= INSIDE_EPS_M || d > thr {
+                    continue;
+                }
+                if best
+                    .map(|(_, bd)| d.total_cmp(&bd) == Ordering::Less)
+                    .unwrap_or(true)
+                {
+                    best = Some((p, d));
                 }
             }
-            None
+
+            let (p, d) = best?;
+            Some(MatchOutput::new(
+                addr.id.clone(),
+                Some(p.id.clone()),
+                d as f32,
+                MatchType::BorderNear,
+            ))
         })
         .collect();
 
+    // Add step2 matches + mark parcels matched
     for m in &step2_results {
-        let prio = match_type_priority(&m.match_type);
-        let entry = addr_best.entry(m.id_ban.clone()).or_insert((100, f32::MAX));
-        if prio < entry.0 || (prio == entry.0 && m.distance_m < entry.1) {
-            *entry = (prio, m.distance_m);
+        if let Some(pid) = &m.id_parcelle {
+            if let Some(&idx) = parcel_idx_by_id.get(pid) {
+                parcel_has_match[idx] = true;
+            }
         }
     }
     all_matches.extend(step2_results);
 
-    // --- Step 3: Address Rescue (Parallel over Addresses) ---
-    // MODIFIED: Removed redundant "Inside" check. Step 1 already covers all Inside matches.
-    let step3_results: Vec<MatchOutput> = addresses
+    // STEP 3 (parcel-centric): FALLBACK_NEAREST for parcels still without any match, d <= fallback_max_distance_m
+    let parcels_without_match_indices: Vec<usize> = parcel_has_match
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, has)| if *has { None } else { Some(idx) })
+        .collect();
+
+    let step3_results: Vec<MatchOutput> = parcels_without_match_indices
         .par_iter()
-        .filter_map(|addr| {
-            if let Some((prio, dist)) = addr_best.get(&addr.id) {
-                if *prio <= 1 {
-                    return None; // Already PreExisting or Inside
+        .filter_map(|&idx| {
+            let parcel = parcels.get_parcel(idx);
+
+            // Step 3 correct/robuste:
+            // - on élargit progressivement l'AABB de la parcelle
+            // - on évalue TOUTES les adresses dans la fenêtre (une fois)
+            // - on s'arrête quand r >= best_dist (garantit le plus proche)
+
+            let dmax = config.fallback_max_distance_m;
+            let mut r = config.fallback_envelope_expand_m.max(5.0);
+
+            let mut seen: HashSet<usize> = HashSet::with_capacity(256);
+            let mut best_idx: Option<usize> = None;
+            let mut best_dist: f64 = f64::INFINITY;
+            let mut best_addr_id: Option<String> = None;
+
+            while r <= dmax {
+                let env = expand_aabb(&parcel.envelope, r);
+                let mut any_new = false;
+
+                for a_idx in address_index.locate_in_envelope_indices(&env) {
+
+                    if !seen.insert(a_idx) {
+                        continue;
+                    }
+                    any_new = true;
+
+                    let addr = address_index.get(a_idx);
+                    // Pruning (borne inférieure): distance(point, AABB(parcel)) <= distance(point, polygon)
+                    // Si la borne inférieure ne peut pas battre best_dist, inutile de calculer la distance au polygone.
+                    if best_idx.is_some() && best_dist.is_finite() {
+                        let pxy = [addr.geom.x(), addr.geom.y()];
+                        let lb2 = parcel.envelope.distance_2(&pxy);
+                        let bd2 = best_dist * best_dist;
+                        if lb2 >= bd2 {
+                            continue;
+                        }
+                    }
+                    let d = parcel.geom.distance_to_point(&addr.geom);
+                    if !d.is_finite() || d > dmax {
+                        continue;
+                    }
+
+                    let better = if best_idx.is_none() {
+                        true
+                    } else {
+                        match d.total_cmp(&best_dist) {
+                            Ordering::Less => true,
+                            Ordering::Equal => {
+                                // tie-break déterministe
+                                match best_addr_id.as_ref() {
+                                    Some(id) => addr.id < *id,
+                                    None => true,
+                                }
+                            }
+                            Ordering::Greater => false,
+                        }
+                    };
+
+                    if better {
+                        best_dist = d;
+                        best_idx = Some(a_idx);
+                        best_addr_id = Some(addr.id.clone());
+                    }
                 }
-                if *prio == 2 && *dist <= config.address_max_distance_m as f32 {
-                    return None; // Already BorderNear within threshold
+
+                // condition d'arrêt: si best_dist <= r, aucune adresse hors env(r) ne peut battre best_dist
+                if best_idx.is_some() && best_dist <= r {
+                    break;
                 }
+
+                if !any_new && r >= dmax {
+                    break;
+                }
+
+                // croissance:
+                // - par défaut: double
+                // - si on a déjà un best_dist, faire un "closing pass" direct à r = best_dist
+                //   (plus rapide que de continuer à doubler jusqu'à le dépasser).
+                let mut next_r = (r * 2.0).min(dmax);
+                if best_idx.is_some() && best_dist.is_finite() && best_dist > r {
+                    next_r = best_dist.min(dmax);
+                }
+                if next_r <= r {
+                    break;
+                }
+                r = next_r;
             }
 
-            // Neighbors
-            let neighbors = parcel_index.nearest_neighbors(&addr.geom, config.num_neighbors);
-            let mut best_near: Option<(&ParcelData, f64)> = None;
+            let a_idx = best_idx?;
 
-            for p in neighbors {
-                let d = p.geom.distance_to_point(&addr.geom);
-                if d <= config.address_max_distance_m
-                    && (best_near.is_none() || d < best_near.unwrap().1)
-                {
-                    best_near = Some((p, d));
-                }
-            }
+            let addr = address_index.get(a_idx);
+            // Si Step 3 découvre un point "Inside", on le sort comme Inside (au lieu de FallbackNearest).
+            let (match_type, out_dist) = if best_dist <= INSIDE_EPS_M {
+                (MatchType::Inside, 0.0_f32)
+            } else {
+                (MatchType::FallbackNearest, best_dist as f32)
+            };
 
-            if let Some((p, d)) = best_near {
-                return Some(MatchOutput::new(
-                    addr.id.clone(),
-                    Some(p.id.clone()),
-                    MatchType::BorderNear,
-                    d as f32,
-                ));
-            }
-            None
+
+            Some(MatchOutput::new(
+                addr.id.clone(),
+                Some(parcel.id.clone()),
+                out_dist,
+                match_type,
+            ))
         })
         .collect();
 
     all_matches.extend(step3_results);
-
     all_matches
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::structures::{AddressInput, MatchConfig, MatchType, ParcelData, ParcelGeometry};
-    use geo::{Point, Polygon};
 
-    // #[test]
-    // fn test_match_inside() {
-    //     let p1 = ParcelData {
-    //         id: "p1".to_string(),
-    //         code_insee: "00000".to_string(),
-    //         geom: ParcelGeometry::Polygon(Polygon::new(
-    //             vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)].into(),
-    //             vec![],
-    //         )),
-    //         envelope:
-    //     };
-    //
-    //     let a1 = AddressInput {
-    //         id: "a1".to_string(),
-    //         code_insee: "00000".to_string(),
-    //         geom: Point::new(5.0, 5.0),
-    //         existing_link: None,
-    //     };
-    //
-    //     // We need to pass the Vec directly as reference?
-    //     // No, we need &Vec which implements ParcelStore?
-    //     // Or coerce.
-    //     let parcels = vec![p1];
-    //     let addresses = vec![a1];
-    //     let config = MatchConfig::default();
-    //
-    //     // Implicit deref or explicit?
-    //     let matches = match_parcels_and_addresses_3_steps(&parcels, &addresses, &config);
-    //     assert_eq!(matches.len(), 1);
-    //     assert_eq!(matches[0].match_type, MatchType::Inside);
-    //     assert_eq!(matches[0].id_parcelle.as_deref(), Some("p1"));
-    // }
-    //
-    // #[test]
-    // fn test_match_fallback() {
-    //      let p1 = ParcelData {
-    //         id: "p1".to_string(),
-    //         code_insee: "00000".to_string(),
-    //         geom: ParcelGeometry::Polygon(Polygon::new(
-    //             vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)].into(),
-    //             vec![],
-    //         )),
-    //     };
-    //     // Address far away
-    //      let a1 = AddressInput {
-    //         id: "a1".to_string(),
-    //         code_insee: "00000".to_string(),
-    //         geom: Point::new(100.0, 100.0),
-    //         existing_link: None,
-    //     };
-    //
-    //     let parcels = vec![p1];
-    //     let addresses = vec![a1];
-    //     let config = MatchConfig::default();
-    //
-    //     let matches = match_parcels_and_addresses_3_steps(&parcels, &addresses, &config);
-    //     assert!(matches.iter().any(|m| m.match_type == MatchType::FallbackNearest));
-    // }
-}
+

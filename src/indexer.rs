@@ -1,33 +1,27 @@
-use crate::structures::{AddressInput, ParcelData, ParcelGeometry, ParcelStore};
-use geo::Point;
-use rstar::{Envelope, PointDistance, RTree, RTreeObject, AABB};
+use crate::structures::{AddressInput, ParcelData, ParcelStore};
+use rstar::{PointDistance, RTree, RTreeObject, AABB};
 
-pub struct ParcelNode<'a> {
+pub struct ParcelNode {
     pub idx: usize,
-    pub geom: &'a ParcelGeometry,
     pub envelope: AABB<[f64; 2]>,
 }
 
-impl<'a> RTreeObject for ParcelNode<'a> {
+impl RTreeObject for ParcelNode {
     type Envelope = AABB<[f64; 2]>;
-
     fn envelope(&self) -> Self::Envelope {
         self.envelope
     }
 }
 
-impl<'a> PointDistance for ParcelNode<'a> {
+impl PointDistance for ParcelNode {
     fn distance_2(&self, point: &[f64; 2]) -> f64 {
-        let p = Point::new(point[0], point[1]);
-        let d = self.geom.distance_to_point(&p);
-        d * d
+        self.envelope.distance_2(point)
     }
 }
 
 pub struct DepartmentIndex<'a> {
-    // We hold a reference to the store
     pub store: &'a dyn ParcelStore,
-    pub tree: RTree<ParcelNode<'a>>,
+    pub tree: RTree<ParcelNode>,
 }
 
 impl<'a> DepartmentIndex<'a> {
@@ -36,7 +30,6 @@ impl<'a> DepartmentIndex<'a> {
         for (idx, p) in store.iter().enumerate() {
             nodes.push(ParcelNode {
                 idx,
-                geom: &p.geom,
                 envelope: p.envelope,
             });
         }
@@ -44,13 +37,8 @@ impl<'a> DepartmentIndex<'a> {
         Self { store, tree }
     }
 
-    pub fn nearest_neighbors(&self, point: &Point<f64>, max_count: usize) -> Vec<&'a ParcelData> {
-        let point_coords = [point.x(), point.y()];
-        self.tree
-            .nearest_neighbor_iter(&point_coords)
-            .take(max_count)
-            .map(|node| self.store.get_parcel(node.idx))
-            .collect()
+    pub fn get_parcel(&self, idx: usize) -> &'a ParcelData {
+        self.store.get_parcel(idx)
     }
 }
 
@@ -61,7 +49,6 @@ pub struct AddressNode {
 
 impl RTreeObject for AddressNode {
     type Envelope = AABB<[f64; 2]>;
-
     fn envelope(&self) -> Self::Envelope {
         self.envelope
     }
@@ -69,16 +56,13 @@ impl RTreeObject for AddressNode {
 
 impl PointDistance for AddressNode {
     fn distance_2(&self, point: &[f64; 2]) -> f64 {
-        let p = self.envelope.center();
-        let dx = p[0] - point[0];
-        let dy = p[1] - point[1];
-        dx * dx + dy * dy
+        self.envelope.distance_2(point)
     }
 }
 
 pub struct AddressIndex<'a> {
-    pub addresses: &'a [AddressInput],
-    pub tree: RTree<AddressNode>,
+    addresses: &'a [AddressInput],
+    tree: RTree<AddressNode>,
 }
 
 impl<'a> AddressIndex<'a> {
@@ -94,13 +78,25 @@ impl<'a> AddressIndex<'a> {
         Self { addresses, tree }
     }
 
-    pub fn locate_in_envelope(
-        &self,
-        envelope: &AABB<[f64; 2]>,
-    ) -> impl Iterator<Item = &'a AddressInput> + use<'a, '_> {
+    pub fn get(&self, idx: usize) -> &'a AddressInput {
+        &self.addresses[idx]
+    }
+
+    pub fn locate_in_envelope<'s>(
+        &'s self,
+        envelope: &'s AABB<[f64; 2]>,
+    ) -> impl Iterator<Item = &'a AddressInput> + 's {
         let addresses = self.addresses;
         self.tree
             .locate_in_envelope(envelope)
             .map(move |node| &addresses[node.idx])
     }
+
+    pub fn locate_in_envelope_indices<'s>(
+        &'s self,
+        envelope: &'s AABB<[f64; 2]>,
+    ) -> impl Iterator<Item = usize> + 's {
+        self.tree.locate_in_envelope(envelope).map(|node| node.idx)
+    }
+
 }

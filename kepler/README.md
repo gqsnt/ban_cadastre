@@ -1,95 +1,118 @@
-# Guide de Visualisation Kepler.gl
+# Kepler.gl – Visualisation (optionnel)
 
-Ce guide explique comment charger et configurer les données de matching dans Kepler.gl pour valider visuellement la qualité des résultats.
+L’export Kepler convertit les artefacts internes (WKB EPSG:2154 + matches) vers des CSV compatibles Kepler.gl :
+- points en WGS84 (`lon`, `lat`),
+- polygones en GeoJSON WGS84 (`geometry`),
+- liens sous forme de segments A→B (colonnes `*_lon`, `*_lat`).
 
-## 1. Installation & Lancement
+---
 
-Ce dossier suppose que vous utilisez une instance locale de Kepler.gl (via un starter kit React ou autre).
+## 1) Prérequis
 
-### Pré-requis
-* Node.js (v18+)
-* Les données générées par `export_for_kepler.ps1`
+- DuckDB CLI accessible (ex: `duckdb`) avec l’extension `spatial` (installée automatiquement par les scripts).
+- Un département `<DEP>` déjà traité par la commande `pipeline` (génère `staging/*` et `batch_results/*`).
 
-### Commandes
-Dans ce dossier `kepler/` :
+Entrées utilisées :
+- `data/ban_cadastre/batch_results/matches_<DEP>.parquet`
+- `data/ban_cadastre/staging/parcelles_<DEP>.parquet`
+- `data/ban_cadastre/staging/adresses_<DEP>.parquet`
 
-```bash
-# Installation des dépendances
-npm install
+---
 
-# Lancement du serveur de développement
-npm run dev
+## 2) Génération des fichiers Kepler
+
+### Windows (PowerShell)
+
+```powershell
+# Depuis la racine du repo
+powershell -ExecutionPolicy Bypass -File scripts/export_kepler.ps1 -Dept 69 -DataDir data/ban_cadastre -DuckdbExe duckdb
 ````
 
-Ouvrir l’URL indiquée (ex: `http://localhost:5173`) dans votre navigateur.
+### Linux/macOS (Bash)
 
------
+```bash
+# Depuis la racine du repo
+chmod +x scripts/export_kepler.sh
+./scripts/export_kepler.sh --dept 69 --data-dir data/ban_cadastre --duckdb duckdb
+```
 
-## 2\. Chargement des Données
+Sorties générées dans `data/ban_cadastre/kepler/` :
 
-Dans l’interface Kepler.gl, cliquez sur le bouton **Add Data** (en haut à gauche) et chargez les 4 fichiers situés dans `data/ban_cadastre/kepler/` :
+1. `kepler_addresses_<DEP>.csv`
+2. `kepler_parcels_<DEP>.csv`
+3. `kepler_links_addr_<DEP>.csv`
+4. `kepler_links_parcel_<DEP>.csv`
 
-1.  `kepler_addresses_<DEP>.csv`
-2.  `kepler_parcels_<DEP>.csv`
-3.  `kepler_links_addr_<DEP>.csv`
-4.  `kepler_links_parcel_<DEP>.csv`
+---
 
------
+## 3) Schéma des exports
 
-## 3\. Configuration des Couches (Cheat Sheet)
+### 3.1 `kepler_addresses_<DEP>.csv` (Points)
 
-Voici la configuration optimale. Créez les couches dans cet ordre pour une bonne superposition.
+Colonnes clés :
 
-### A. Couche Parcelles (Fond de carte)
+* `lon`, `lat`
+* `class_match` ∈ {`UNMATCHED`, `Inside`, `0-5`, `5-15`, `15-50`, `>50`}
+* `match_type`, `distance_m`, `confidence`
 
-*Permet de voir la couverture cadastrale et la qualité du match par parcelle.*
+### 3.2 `kepler_parcels_<DEP>.csv` (Polygones)
 
-| Paramètre | Valeur |
-| :--- | :--- |
-| **Type** | **Polygon** |
-| **Source** | `kepler_parcels_<DEP>` |
-| **Geometry** | (Détecté auto) `geometry` |
-| **Fill Color** | Based on: `parcel_class` (Categorical) |
-| **Palette** | Froid (0-100m) vers Chaud (\>1500m) |
-| **Stroke** | Fin (0.5), couleur neutre (gris/bleu) |
+Colonnes clés :
 
-### B. Couche Liens Adresses (Vérification BAN)
+* `geometry` (GeoJSON)
+* `parcel_class` ∈ {`UNMATCHED`, `Inside`, `0-100`, `100-250`, `250-500`, `500-1000`, `1000-1500`, `>1500`}
+* `match_type`, `distance_m`, `confidence`
 
-*Vue "Adresse" : Montre où chaque adresse se connecte.*
+### 3.3 `kepler_links_addr_<DEP>.csv` (Lignes Adresse → Centroïde parcelle)
 
-| Paramètre | Valeur |
-| :--- | :--- |
-| **Type** | **Line** |
-| **Source** | `kepler_links_addr_<DEP>` |
-| **Point A** | `addr_lat`, `addr_lon` |
-| **Point B** | `parc_lat`, `parc_lon` |
-| **Color** | Based on: `class_match` (Categorical) |
-| **Opacity** | \~0.4 (faible pour ne pas surcharger) |
+Colonnes clés :
 
-### C. Couche Liens Parcelles (Vérification Cadastre)
+* `addr_lon`, `addr_lat`
+* `parc_lon`, `parc_lat`
+* `class_match`, `match_type`, `distance_m`, `confidence`
 
-*Vue "Parcelle" : Montre quelle adresse a été choisie pour chaque parcelle.*
+### 3.4 `kepler_links_parcel_<DEP>.csv` (Lignes Centroïde parcelle → Adresse)
 
-| Paramètre | Valeur |
-| :--- | :--- |
-| **Type** | **Line** |
-| **Source** | `kepler_links_parcel_<DEP>` |
-| **Point A** | `parc_lat`, `parc_lon` (Centroïde parcelle) |
-| **Point B** | `addr_lat`, `addr_lon` (Adresse cible) |
-| **Color** | Based on: `class_match` (Categorical) |
-| **Stroke** | **2.0** (Plus épais pour bien voir les erreurs) |
-| **Opacity** | 0.8 |
+Colonnes clés :
 
-### D. Couche Adresses (Points)
+* `parc_lon`, `parc_lat`
+* `addr_lon`, `addr_lat`
+* `class_match`, `match_type`, `distance_m`, `confidence`
 
-*Les points d'entrée BAN.*
+---
 
-| Paramètre | Valeur |
-| :--- | :--- |
-| **Type** | **Point** |
-| **Source** | `kepler_addresses_<DEP>` |
-| **Lat/Lon** | `lat`, `lon` |
-| **Color** | Based on: `class_match` (Categorical) |
-| **Radius** | 4.0 |
+## 4) Chargement dans Kepler.gl
 
------
+1. `Add Data` → importer les 4 CSV.
+2. Créer les couches dans l’ordre suivant.
+
+### A) Parcelles (Polygon)
+
+* Type : `Polygon`
+* Source : `kepler_parcels_<DEP>`
+* Geometry : colonne `geometry`
+* Color : `parcel_class` (categorical)
+
+### B) Liens Adresse → Parcelle (Line)
+
+* Type : `Line`
+* Source : `kepler_links_addr_<DEP>`
+* Point A : `addr_lat` / `addr_lon`
+* Point B : `parc_lat` / `parc_lon`
+* Color : `class_match` (categorical)
+
+### C) Liens Parcelle → Adresse (Line)
+
+* Type : `Line`
+* Source : `kepler_links_parcel_<DEP>`
+* Point A : `parc_lat` / `parc_lon`
+* Point B : `addr_lat` / `addr_lon`
+* Color : `class_match` (categorical)
+
+### D) Adresses (Point)
+
+* Type : `Point`
+* Source : `kepler_addresses_<DEP>`
+* Lat/Lon : `lat` / `lon`
+* Color : `class_match` (categorical)
+

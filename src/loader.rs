@@ -22,13 +22,13 @@ pub fn load_parcels(path: &Path) -> Result<Vec<ParcelData>> {
     let file =
         File::open(path).with_context(|| format!("Failed to open parcel file: {:?}", path))?;
     let reader = SerializedFileReader::new(file).context("Failed to create parquet reader")?;
-    let num_rows = reader.metadata().file_metadata().num_rows() as usize;
 
+    let num_rows = reader.metadata().file_metadata().num_rows() as usize;
     let mut parcels = Vec::with_capacity(num_rows);
+
     for row in reader.get_row_iter(None)? {
         let row = row?;
 
-        // Columns: 0 -> id, 1 -> code_insee, 2 -> geom (WKB)
         let id = get_string_or_long(&row, 0)
             .ok_or_else(|| anyhow!("Parcel id column is neither string nor long"))?;
         let code_insee = get_string_or_long(&row, 1)
@@ -42,12 +42,14 @@ pub fn load_parcels(path: &Path) -> Result<Vec<ParcelData>> {
         let geom = match geom_geo {
             Geometry::Polygon(p) => ParcelGeometry::Polygon(p),
             Geometry::MultiPolygon(mp) => ParcelGeometry::MultiPolygon(mp),
-            _ => {
-                // Skip unsupported geometries
-                continue;
-            }
+            _ => continue,
         };
-        let envelope = geom.envelope();
+
+        // Critical: skip empty/invalid geometry (avoid AABB (0,0) pollution).
+        let envelope = match geom.envelope_opt() {
+            Some(e) => e,
+            None => continue,
+        };
 
         parcels.push(ParcelData {
             id,
@@ -56,19 +58,21 @@ pub fn load_parcels(path: &Path) -> Result<Vec<ParcelData>> {
             envelope,
         });
     }
+
     Ok(parcels)
 }
+
 pub fn load_addresses(path: &Path) -> Result<Vec<AddressInput>> {
     let file =
         File::open(path).with_context(|| format!("Failed to open address file: {:?}", path))?;
     let reader = SerializedFileReader::new(file).context("Failed to create parquet reader")?;
-    let num_rows = reader.metadata().file_metadata().num_rows() as usize;
 
+    let num_rows = reader.metadata().file_metadata().num_rows() as usize;
     let mut addresses = Vec::with_capacity(num_rows);
+
     for row in reader.get_row_iter(None)? {
         let row = row?;
 
-        // Columns: 0 -> id_ban, 1 -> code_insee, 2 -> geom (WKB Point), 3 -> existing_link (String/Null/Long)
         let id = get_string_or_long(&row, 0)
             .ok_or_else(|| anyhow!("Address id column is neither string nor long"))?;
         let code_insee = get_string_or_long(&row, 1)
@@ -80,10 +84,9 @@ pub fn load_addresses(path: &Path) -> Result<Vec<AddressInput>> {
             .map_err(|e| anyhow!("Failed to parse WKB for address {}: {}", id, e))?;
         let geom = match geom_geo {
             Geometry::Point(p) => p,
-            _ => continue, // Should be points
+            _ => continue,
         };
 
-        // existing_link: string ou long dans certains cas, ou null
         let existing_link_raw = get_string_or_long(&row, 3);
         let existing_link = existing_link_raw.and_then(|s| {
             let s_trim = s.trim().to_string();
@@ -101,5 +104,6 @@ pub fn load_addresses(path: &Path) -> Result<Vec<AddressInput>> {
             existing_link,
         });
     }
+
     Ok(addresses)
 }
